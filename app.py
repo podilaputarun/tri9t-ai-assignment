@@ -247,7 +247,7 @@ def generate(selection_id: int, req: GenerateRequest=GenerateRequest()):
                 if isinstance(raw,list) and 3<=len(raw)<=5 and all(isinstance(x,dict) and all(k in x for k in ('title','steps','expected_result')) for x in raw): tests=raw
             except Exception:
                 tests=None
-        
+
         if tests is None:
             # Rule-based fallback; this is not LLM-generated output.
             source_text = s.source_snapshot or ""
@@ -364,4 +364,26 @@ def generate(selection_id: int, req: GenerateRequest=GenerateRequest()):
                 "Rule-based fallback is not an LLM response. "
                 "Configure OPENAI_API_KEY to enable LLM generation."
             )
+        }
+@app.get('/generated/{generated_id}')
+def get_generated(generated_id: int):
+    with Session() as db:
+        record = db.get(GeneratedTests, generated_id)
+
+        if not record:
+            raise HTTPException(404, 'Generated tests not found')
+
+        selection = db.get(Selection, record.selection_id)
+        current_hash = selection.source_hash if selection else None
+
+        return {
+            "generated_id": record.id,
+            "selection_id": record.selection_id,
+            "version_pinned": (
+                db.get(ManualVersion, selection.version_id).label
+                if selection else None
+            ),
+            "tests": json.loads(record.output_json),
+            "stale": current_hash != record.source_hash,
+            "source_hash": record.source_hash
         }
