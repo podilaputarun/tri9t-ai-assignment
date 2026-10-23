@@ -247,15 +247,121 @@ def generate(selection_id: int, req: GenerateRequest=GenerateRequest()):
                 if isinstance(raw,list) and 3<=len(raw)<=5 and all(isinstance(x,dict) and all(k in x for k in ('title','steps','expected_result')) for x in raw): tests=raw
             except Exception:
                 tests=None
+        
         if tests is None:
-            # Explicit fallback so the endpoint is demonstrable without an API key; not represented as LLM output.
-            tests=[{'title':'Check documented limits','preconditions':'Device is powered on and configured for the selected manual section.','steps':['Exercise the relevant limit or boundary described in the selected text.'],'expected_result':'Behavior matches the selected source text.','source_excerpt':s.source_snapshot[:240],'generation_mode':'template_fallback'} ,{'title':'Check error handling','preconditions':'A safe test environment is available.','steps':['Simulate the applicable documented error condition.'],'expected_result':'The documented error response occurs and the device reaches the specified safe state.','source_excerpt':s.source_snapshot[:240],'generation_mode':'template_fallback'}, {'title':'Check persistence or recovery','preconditions':'The device and any required companion app are available.','steps':['Repeat the documented operation and inspect its result after recovery.'],'expected_result':'The result and recovery behavior match the selected manual text.','source_excerpt':s.source_snapshot[:240],'generation_mode':'template_fallback'}]
-        record=GeneratedTests(selection_id=s.id,source_hash=s.source_hash,output_json=json.dumps(tests)); db.add(record); db.commit(); db.refresh(record)
-        return {'generated_id':record.id,'selection_id':s.id,'version_pinned':db.get(ManualVersion,s.version_id).label,'tests':tests,'generation_mode':'llm' if os.getenv('OPENAI_API_KEY') and all(t.get('generation_mode')!='template_fallback' for t in tests) else 'template_fallback','note':'Template fallback is not an LLM response; configure OPENAI_API_KEY for LLM generation.'}
-@app.get('/generated/{generated_id}')
-def get_generated(generated_id: int):
-    with Session() as db:
-        g=db.get(GeneratedTests,generated_id)
-        if not g: raise HTTPException(404,'Generated result not found')
-        s=db.get(Selection,g.selection_id); current_hash,stale,current_version=current_source_hash(db,s)
-        return {'generated_id':g.id,'selection_id':s.id,'tests':json.loads(g.output_json),'source_hash_at_generation':g.source_hash,'stale':stale,'current_version':current_version,'staleness_note':'Hash comparison is conservative and cannot determine whether a change is clinically meaningful.'}
+            # Rule-based fallback; this is not LLM-generated output.
+            source_text = s.source_snapshot or ""
+            lower_text = source_text.lower()
+            excerpt = source_text[:240]
+
+            tests = [
+                {
+                    "title": "Verify documented operating limits",
+                    "preconditions": "The device is configured according to the selected manual section.",
+                    "steps": [
+                        "Identify the operating limits stated in the selected section.",
+                        "Test a valid value within the documented limits.",
+                        "Test a boundary value where safe and applicable."
+                    ],
+                    "expected_result": (
+                        "The device behavior matches the operating limits "
+                        "documented in the selected section."
+                    ),
+                    "source_excerpt": excerpt,
+                    "generation_mode": "template_fallback"
+                },
+                {
+                    "title": "Verify error handling",
+                    "preconditions": "A safe test environment is available.",
+                    "steps": [
+                        "Identify an error condition described in the selected section.",
+                        "Simulate the condition where safe and applicable.",
+                        "Observe the error indication and recovery behavior."
+                    ],
+                    "expected_result": (
+                        "The device responds according to the selected "
+                        "manual section."
+                    ),
+                    "source_excerpt": excerpt,
+                    "generation_mode": "template_fallback"
+                },
+                {
+                    "title": "Verify repeated operation",
+                    "preconditions": "The device is configured for the documented operation.",
+                    "steps": [
+                        "Perform the documented operation once.",
+                        "Repeat the operation under the same conditions.",
+                        "Compare the results for consistency."
+                    ],
+                    "expected_result": (
+                        "Repeated operations behave consistently with "
+                        "the selected manual section."
+                    ),
+                    "source_excerpt": excerpt,
+                    "generation_mode": "template_fallback"
+                },
+                {
+                    "title": "Verify battery-related behavior",
+                    "preconditions": "Applicable when the selected section discusses battery operation.",
+                    "steps": [
+                        "Identify the documented battery limits or indicators.",
+                        "Check the relevant battery status under safe test conditions.",
+                        "Compare the observed behavior with the manual."
+                    ],
+                    "expected_result": (
+                        "Battery behavior matches the documented requirements."
+                    ),
+                    "source_excerpt": excerpt,
+                    "generation_mode": "template_fallback"
+                },
+                {
+                    "title": "Verify communication or data handling",
+                    "preconditions": "Applicable when the selected section discusses communication or data handling.",
+                    "steps": [
+                        "Perform the documented communication or data operation.",
+                        "Inspect the resulting status or stored data.",
+                        "Repeat after a safe interruption if applicable."
+                    ],
+                    "expected_result": (
+                        "Communication or data handling follows the "
+                        "requirements in the selected manual section."
+                    ),
+                    "source_excerpt": excerpt,
+                    "generation_mode": "template_fallback"
+                }
+            ]
+
+            # Add section-specific context to the battery test.
+            if "battery" in lower_text:
+                tests[3]["preconditions"] = (
+                    "The selected manual section describes battery operation."
+                )
+
+        record = GeneratedTests(
+            selection_id=s.id,
+            source_hash=s.source_hash,
+            output_json=json.dumps(tests)
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+        return {
+            "generated_id": record.id,
+            "selection_id": s.id,
+            "version_pinned": db.get(ManualVersion, s.version_id).label,
+            "tests": tests,
+            "generation_mode": (
+                "llm"
+                if os.getenv("OPENAI_API_KEY")
+                and all(
+                    t.get("generation_mode") != "template_fallback"
+                    for t in tests
+                )
+                else "template_fallback"
+            ),
+            "note": (
+                "Rule-based fallback is not an LLM response. "
+                "Configure OPENAI_API_KEY to enable LLM generation."
+            )
+        }
